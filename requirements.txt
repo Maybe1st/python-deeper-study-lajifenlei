@@ -1,0 +1,7 @@
+# Minimal requirements for the project
+Flask>=3.0
+torch>=2.2.0
+torchvision>=0.16.0
+Pillow>=9.0.0
+numpy>=1.24.0
+Werkzeug>=3.0

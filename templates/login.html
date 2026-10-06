@@ -1,0 +1,17 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>登录</h2>
+<form method="post">
+  <div class="mb-3">
+    <label>用户名</label>
+    <input class="form-control" name="username">
+  </div>
+  <div class="mb-3">
+    <label>密码</label>
+    <input type="password" class="form-control" name="password">
+  </div>
+  {% if error %}<div class="alert alert-danger">{{ error }}</div>{% endif %}
+  <button class="btn btn-primary">登录</button>
+  <a href="/register" class="btn btn-link">注册</a>
+</form>
+{% endblock %}

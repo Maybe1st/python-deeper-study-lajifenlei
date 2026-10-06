@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>仪表盘</h2>
+<p>系统统计数据展示（通过 /api/dashboard 获取真实数据）。</p>
+<div id="charts">
+  <div id="class_dist" style="width:100%;height:400px;"></div>
+  <div id="daily_trend" style="width:100%;height:300px;"></div>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.0/dist/echarts.min.js"></script>
+<script>
+async function load(){
+  const r = await fetch('/api/dashboard');
+  const j = await r.json();
+  if(j.code!==0) return;
+  const data = j.data;
+  const classDist = data.class_distribution || {};
+  const names = Object.keys(classDist);
+  const values = names.map(n=>({name:n,value:classDist[n]}));
+  var chart = echarts.init(document.getElementById('class_dist'));
+  chart.setOption({title:{text:'类别分布'},tooltip:{},series:[{type:'pie',data:values}]});
+
+  const trend = data.daily_trend||[];
+  var chart2 = echarts.init(document.getElementById('daily_trend'));
+  chart2.setOption({title:{text:'近14日识别趋势'},xAxis:{type:'category',data:trend.map(d=>d.date)},yAxis:{},series:[{type:'line',data:trend.map(d=>d.count)}]});
+}
+load();
+</script>
+{% endblock %}

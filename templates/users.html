@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>用户管理</h2>
+<table class="table">
+  <thead><tr><th>ID</th><th>用户名</th><th>管理员</th><th>操作</th></tr></thead>
+  <tbody id="tb"></tbody>
+</table>
+<script>
+async function load(){
+  const r = await fetch('/api/users');
+  const j = await r.json();
+  if(j.code!==0){document.getElementById('tb').innerHTML='<tr><td colspan="4">无权限或错误</td></tr>'; return}
+  const tb = document.getElementById('tb'); tb.innerHTML='';
+  for(const u of j.data){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${u.id}</td><td>${u.username}</td><td>${u.is_admin?'是':'否'}</td><td><button class="btn btn-sm btn-danger" onclick="del(${u.id})">删除</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+async function del(id){
+  if(!confirm('确认删除？')) return;
+  const r = await fetch('/api/users/'+id,{method:'DELETE'});
+  const j = await r.json();
+  if(j.code===0) load(); else alert(j.message||'删除失败');
+}
+load();
+</script>
+{% endblock %}

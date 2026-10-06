@@ -1,0 +1,28 @@
+{% extends 'base.html' %}
+{% block content %}
+<h2>识别历史（最近）</h2>
+<table class="table">
+  <thead><tr><th>ID</th><th>文件</th><th>预测</th><th>置信度</th><th>时间</th><th>操作</th></tr></thead>
+  <tbody id="tb"></tbody>
+</table>
+<script>
+async function load(){
+  const r = await fetch('/api/records?page=1&per_page=20');
+  const j = await r.json();
+  const tb = document.getElementById('tb');
+  tb.innerHTML='';
+  if(j.code!==0) return;
+  for(const it of j.data.items){
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td>${it.id}</td><td><img src="/static/uploads/${it.filename}" style="height:60px"></td><td>${it.predicted_class}</td><td>${(it.confidence*100).toFixed(2)}%</td><td>${it.created_at}</td><td><button class="btn btn-sm btn-danger" onclick="del(${it.id})">删除</button></td>`;
+    tb.appendChild(tr);
+  }
+}
+async function del(id){
+  const r = await fetch('/api/records/'+id,{method:'DELETE'});
+  const j = await r.json();
+  if(j.code===0) load(); else alert(j.message||'删除失败');
+}
+load();
+</script>
+{% endblock %}
