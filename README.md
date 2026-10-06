@@ -1,154 +1,229 @@
-# 基于深度学习的垃圾分类系统
+# 基于深度学习的垃圾分类系统的设计与实现
 
-这是一个最小可运行版的垃圾分类 Web 平台实现，基于 Flask + PyTorch。功能涵盖用户认证、图片上传推理、识别记录管理、仪表盘统计、模型训练触发以及基础的用户管理界面。该实现目标是：从 README 的模板演化成一个可直接运行的原型，便于学习、调试与扩展。
+## 项目简介
+
+本系统是一个基于 Flask Web 框架与 PyTorch 深度学习模型的垃圾分类智能识别平台。系统面向垃圾图像分类场景，能够对上传图片中的玻璃、纸张、纸板、塑料、金属、其他垃圾等类别进行识别，并在后台保存识别记录与统计结果。
+
+系统使用 TrashNet 公开垃圾分类数据集进行模型训练，管理员可手动发起模型训练，训练完成后自动加载新权重。启动服务不会自动训练。
 
 ---
 
-## 主要特性
-- 用户注册 / 登录 / 退出（Session）
-- 管理员与普通用户权限
-- 图片上传并调用 PyTorch 模型实时推理（ResNet18 占位实现）
-- 识别记录保存（SQLite）与分页查询 / 删除
-- 仪表盘统计接口（类别分布、可回收/干垃圾分布、置信度区间、各类平均置信度、数据集分布、近 14 日识别趋势）
-- 管理员可发起训练任务，后台执行 train.py 并写入训练记录
-- 简单前端页面（Jinja2 + Bootstrap + ECharts）：仪表盘、识别页、历史、用户管理、数据集、训练
+## API 接口
+
+所有接口返回 JSON，格式 `{ "code": 0, "data": ... }` 或 `{ "code": 1, "message": "..." }`。数据均来自数据库或模型真实推理，无 mock。
+
+| 接口 | 方法 | 权限 | 说明 |
+| --- | --- | --- | --- |
+| `/api/dashboard` | GET | 登录 | 数据概览统计：识别次数、置信度、类别/类型分布、置信度区间、各类平均置信度、数据集分布、识别趋势；管理员可查看混淆矩阵 |
+| `/api/dataset` | GET | 登录 | TrashNet 数据集各类别真实样本数 |
+| `/api/records` | GET | 登录 | 识别记录分页，`page`/`per_page` 参数 |
+| `/api/records/<id>` | DELETE | 登录 | 删除识别记录 |
+| `/api/classify` | POST | 登录 | 上传图片分类，返回模型真实推理结果 |
+| `/api/model/status` | GET | 登录 | 模型是否存在及最近训练指标 |
+| `/api/training/records` | GET | 管理员 | 训练历史记录 |
+| `/api/training/start` | POST | 管理员 | 发起训练，body: `{epochs, batch_size, learning_rate}` |
+| `/api/users` | GET | 管理员 | 用户列表 |
+| `/api/users/<id>` | DELETE | 管理员 | 删除用户 |
+
+**`/api/dashboard` 主要数据字段（均为真实统计，无 mock）：**
+
+| 字段 | 说明 |
+| --- | --- |
+| `class_distribution` | 识别记录按六类统计 |
+| `category_distribution` | 可回收物 / 干垃圾统计 |
+| `confidence_bins` | 置信度区间分布（0–50%、50–70%…） |
+| `class_avg_confidence` | 各类平均置信度与次数 |
+| `dataset_distribution` | TrashNet 目录真实样本数 |
+| `daily_trend` | 近 14 日识别趋势 |
+| `confusion_matrix` | 管理员：最近一次训练测试集混淆矩阵 |
+
+**`/api/classify` 返回字段说明（数值由模型实时推理产生）：**
+
+```json
+{
+  "code": 0,
+  "data": {
+    "predicted_class": "plastic",
+    "predicted_cn": "塑料",
+    "category": "可回收物",
+    "confidence": 0.8734,
+    "top3": [
+      {
+        "class_name": "plastic",
+        "class_cn": "塑料",
+        "category": "可回收物",
+        "confidence": 0.8734
+      },
+      {
+        "class_name": "glass",
+        "class_cn": "玻璃",
+        "category": "可回收物",
+        "confidence": 0.0621
+      },
+      {
+        "class_name": "paper",
+        "class_cn": "纸张",
+        "category": "可回收物",
+        "confidence": 0.0312
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 功能模块
+
+| 模块 | 功能说明 |
+| --- | --- |
+| **用户认证** | 用户注册、登录、退出；基于 Session 的会话管理；管理员与普通用户两级角色权限控制 |
+| **数据概览** | 核心指标卡片 + ECharts 图表：垃圾类别分布、可回收/干垃圾分布、置信度区间分布、各类平均置信度、TrashNet 样本分布、近 14 日识别趋势 |
+| **垃圾识别** | 支持点击上传单张图片，实时执行模型推理，返回预测类别、垃圾类型、置信度与 Top-3 结果，并自动保存识别记录 |
+| **识别记录** | 识别记录分页浏览，查看历史识别结果，删除记录，导出 CSV（中文表头） |
+| **数据集信息** | 展示 TrashNet 数据集统计（各类别样本数、数据集路径、下载地址、模型架构说明） |
+| **模型训练** | 管理员可配置训练轮次、批次大小、学习率并启动在线训练；左侧模型指标卡与右侧准确率曲线同高展示，另含损失曲线与训练历史记录 |
+| **用户管理** | 管理员查看所有用户列表，删除普通用户账户 |
+
+---
+
+## 垃圾类别
+
+系统支持识别以下六类垃圾：
+
+| 类别 ID | 英文名称 | 中文名称 | 垃圾类型 | 说明 |
+| --- | --- | --- | --- | --- |
+| 0 | glass | 玻璃 | 可回收物 | 玻璃瓶、玻璃制品等 |
+| 1 | paper | 纸张 | 可回收物 | 报纸、书本、纸箱纸等 |
+| 2 | cardboard | 纸板 | 可回收物 | 纸箱、硬纸板等 |
+| 3 | plastic | 塑料 | 可回收物 | 塑料瓶、塑料袋等 |
+| 4 | metal | 金属 | 可回收物 | 易拉罐、金属制品等 |
+| 5 | trash | 其他垃圾 | 干垃圾 | 不可回收的其他垃圾 |
+
+---
+
+## 标准版目录结构
+
+```text
+python-deeper-study-lajifenlei/
+├── app.py                         # Flask 应用工厂
+├── run.py                         # 启动脚本（初始化数据库、启动服务，无模型时提示训练）
+├── train.py                       # 独立模型训练脚本
+├── config.py                      # 系统配置（端口、数据库路径、模型路径、类别映射、训练参数）
+├── database.py                    # SQLite 数据库初始化与连接管理
+├── requirements.txt               # Python 依赖包清单
+├── mac_run.sh                     # macOS/Linux 一键启动脚本
+├── window_run.bat                 # Windows 一键启动脚本
+├── 项目说明.md                    # 项目功能与目录结构说明
+├── 训练手册.md                    # 模型训练与数据集使用手册
+├── DATASET.md                     # 数据集下载地址与引用说明
+├── ml/
+│   ├── __init__.py
+│   └── classifier.py              # ResNet18 / TrashCNN 模型定义、训练与推理
+├── services/
+│   ├── auth_service.py            # 用户认证业务逻辑
+│   ├── classify_service.py        # 图片分类与记录管理
+│   ├── stats_service.py           # 数据统计与数据集信息
+│   └── train_service.py           # 训练记录管理
+├── routes/
+│   ├── auth.py                    # 登录、注册、退出路由
+│   ├── main.py                    # 页面路由
+│   └── api.py                     # API 接口路由
+├── templates/                     # Jinja2 HTML 模板
+│   ├── base.html                  # 基础模板（侧边栏、本地资源引用）
+│   ├── login.html                 # 登录页
+│   ├── register.html              # 注册页
+│   ├── dashboard.html             # 数据概览
+│   ├── classify.html              # 垃圾识别页
+│   ├── history.html               # 识别记录页
+│   ├── dataset.html               # 数据集信息页
+│   ├── train.html                 # 模型训练页
+│   └── users.html                 # 用户管理页
+├── static/
+│   ├── css/
+│   │   └── app.css                # 自定义样式（绿色环保主题）
+│   ├── uploads/                   # 用户上传图片存储目录
+│   └── vendor/                    # 本地前端资源（无需 CDN）
+│       ├── bootstrap/             # Bootstrap 5.3 CSS/JS
+│       └── echarts/               # ECharts 5.5 图表库
+├── data/
+│   └── app.db                     # SQLite 数据库文件（自动生成）
+├── models_weights/                # 训练输出的模型权重
+│   ├── trash_classifier.pth       # 分类模型权重
+│   └── model_meta.json            # 模型元信息（准确率、训练时间等）
+├── trashnet-master/               # TrashNet 数据集
+│   └── data/
+│       └── dataset-resized/       # 已缩放数据集（6 类，2527 张）
+│           ├── glass/
+│           ├── paper/
+│           ├── cardboard/
+│           ├── plastic/
+│           ├── metal/
+│           └── trash/
+├── 运行步骤必看/
+│   ├── window.md                  # Windows 运行步骤说明
+│   └── mac.md                     # macOS 运行步骤说明
+└── 用户上传检测文件/              # 测试用垃圾图片样例
+    ├── 玻璃.jpg
+    ├── 纸张.jpg
+    ├── 纸板.jpg
+    ├── 塑料.jpg
+    ├── 金属.jpg
+    ├── 其他垃圾.jpg
+    └── 使用说明.md
+```
 
 ---
 
 ## 技术栈
-- 语言：Python 3.x
-- 后端：Flask
-- 深度学习：PyTorch + TorchVision（ResNet18 占位）
-- 数据库：SQLite（data/app.db）
-- 图像处理：Pillow
-- 前端：Bootstrap + ECharts
+
+| 类别 | 技术 |
+| --- | --- |
+| **后端框架** | Python 3.12 + Flask 3.0 |
+| **用户认证** | Flask Session + Werkzeug 密码哈希 |
+| **数据库** | SQLite 3 |
+| **深度学习** | PyTorch + TorchVision（ResNet18 迁移学习，兼容 TrashCNN） |
+| **图像处理** | Pillow |
+| **数据处理** | NumPy |
+| **前端** | HTML5 + Bootstrap 5.3 + ECharts 5.5 |
+| **数据集来源** | TrashNet（Stanford CS 229 公开数据集） |
 
 ---
 
-## 快速开始
-1. 克隆仓库并进入目录：
+## 环境要求
 
-```bash
-git clone https://github.com/Maybe1st/python-deeper-study-lajifenlei.git
-cd python-deeper-study-lajifenlei
-```
-
-2. 创建虚拟环境并安装依赖：
-
-```bash
-python -m venv .venv
-# macOS / Linux
-source .venv/bin/activate
-# Windows (PowerShell)
-# .\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-```
-
-3. 启动服务（开发模式）：
-
-```bash
-python run.py
-```
-
-服务默认监听 0.0.0.0:5000（开发模式）。
-
-默认管理员账号：
-- 用户名：`admin`
-- 密码：`admin123`
-
-首次启动会自动初始化 SQLite 数据库并创建管理员账号。
+| 项目 | 要求 |
+| --- | --- |
+| **Python** | 3.12 |
+| **操作系统** | Windows / macOS / Linux |
+| **内存** | 建议 4GB 以上（模型推理与训练时使用） |
+| **磁盘** | 约 1GB（含依赖、数据集与模型权重） |
+| **GPU** | 可选，支持 CUDA / CPU 自动回退 |
+| **浏览器** | Chrome / Firefox / Safari / Edge 现代版本 |
 
 ---
 
-## 目录结构（实现版）
-```
-python-deeper-study-lajifenlei/
-├── app.py                 # Flask 应用工厂，加载模型并注册蓝图
-├── run.py                 # 启动脚本
-├── train.py               # 训练脚本（可在后台由 /api/training/start 触发）
-├── config.py              # 配置：路径、类别映射、常量
-├── database.py            # SQLite 初始化与简易访问
-├── requirements.txt       # 依赖清单
-├── templates/             # Jinja2 模板（dashboard, classify, history, users...）
-├── static/                # 静态资源（css、uploads）
-├── ml/                    # 模型封装：ml/classifier.py（ResNet18 占位实现）
-├── routes/                # 路由蓝图（auth、main、api）
-├── data/                  # 运行时数据（app.db）
-├── models_weights/        # 训练输出模型/占位权重（trash_classifier.pth）
-└── trashnet-master/       # 可选：将 TrashNet 数据集放在这里以运行训练
-```
+## 账号信息
+
+系统初始化时自动创建以下默认账户：
+
+| 角色 | 用户名 | 密码 | 权限 |
+| --- | --- | --- | --- |
+| 管理员 | admin | admin123 | 全部功能，含模型训练、用户管理 |
+| 普通用户 | 自行注册 | 自行设置 | 垃圾识别、识别记录、数据概览、数据集查看 |
+
+新注册用户默认为普通用户角色，仅能访问自身识别数据；管理员可查看全部用户数据。
 
 ---
 
-## 主要 API（JSON 返回，格式：{ "code":0, "data":... } 或 { "code":1, "message":... }）
-- POST /api/classify
-  - 说明：上传图片进行分类（需登录）
-  - 表单字段：file（multipart/form-data）
-  - 返回示例（data）：predicted_class, predicted_cn, category, confidence, top3
+## 获取完整源码
 
-- GET /api/model/status
-  - 说明：检查模型权重是否存在
-  - 返回 data: {"exists": true/false}
+- 网站：[AI源码](https://www.aiyuanma.vip)
+- 本项目详情：[https://www.aiyuanma.vip/posts/python-deeper-study-lajifenlei](https://www.aiyuanma.vip/posts/python-deeper-study-lajifenlei)
 
-- POST /api/training/start
-  - 说明：管理员触发训练（后台运行 train.py），body 为 JSON：{"epochs":.., "batch_size":.., "learning_rate":..}
-  - 返回 data 包含 training_id
+## 联系方式
 
-- GET /api/training/records
-  - 说明：管理员查询训练历史（started_at, finished_at, status, accuracy）
+- QQ：861077046
+- 邮箱：861077046@qq.com
 
-- GET /api/records?page=1&per_page=10
-  - 说明：分页查询当前用户（管理员可查看全部）的识别记录
-
-- DELETE /api/records/<id>
-  - 说明：删除识别记录（管理员可删除任意记录）
-
-- GET /api/dashboard
-  - 说明：返回系统统计数据（类别分布、置信度分布、每类平均置信度、数据集样本分布、近 14 日趋势）
-
-- GET /api/users (管理员)
-  - 说明：列出用户（id, username, is_admin）
-
-- DELETE /api/users/<id> (管理员)
-  - 说明：删除用户（保护最后一个管理员）
-
----
-
-## 模型与训练
-- 模型代码位于 ml/classifier.py，当前实现使用 torchvision.models.resnet18（未加载预训练权重），并将全连接层替换为 6 类输出。
-- 如果你已有训练好的权重文件（models_weights/trash_classifier.pth），放入该路径，应用启动时会尝试加载它用于推理。
-- 训练脚本：train.py。数据集格式使用 torchvision.datasets.ImageFolder，默认数据目录为 `trashnet-master/data/dataset-resized`（按 README 的 TrashNet 目录组织，6 个子目录：glass, paper, cardboard, plastic, metal, trash）。
-- 训练会将权重保存到 `models_weights/trash_classifier.pth`，并写入同路径下的 meta JSON（例如 `models_weights/trash_classifier.json`）包含 accuracy 信息，后台触发训练会把此 accuracy 写入 training_records 表。
-
----
-
-## 数据库（SQLite）结构简要
-- users(id, username, password_hash, is_admin)
-- records(id, user_id, filename, predicted_class, confidence, created_at)
-- training_records(id, started_at, finished_at, status, accuracy)
-
-首次启动会创建这些表并插入默认管理员（admin/admin123）。
-
----
-
-## 开发与调试提示
-- 若要在 GPU 上训练或推理，请在 config.py 中将 DEVICE 改为 'cuda'，并确保安装的 PyTorch 支持 CUDA。
-- 日志与异常可在控制台查看（app.run debug=True）。生产部署请使用 gunicorn / uWSGI 并关闭 debug。
-- 若 /api/classify 返回置信度均为 0 或预测结果不合理，可能是模型权重为空或未训练；可以通过 `python train.py` 在本机先训练一个快速示例（数据集需存在）。
-- 上传文件保存在 static/uploads 下；可定期清理以节省磁盘空间。
-
----
-
-## 已知限制与后续改进
-- 当前模型使用 ResNet18 占位实现，没有集成更复杂的数据增强、验证集评估、早停、学习率调度等训练工具。
-- 权限控制简单：基于 session 的 is_admin 标志；生产中建议使用更严格的认证、CSRF 防护、输入校验与文件类型验证。
-- 前端为教学示例，样式与交互可进一步完善（例如：异步加载、分页、导出 CSV、文件大小限制、进度显示）。
-
----
-
-## 贡献与许可证
-欢迎提交 issue 或 PR 改进功能。如果需要我把代码打包成 zip 并发给你，或把项目进一步完善（例如在 CI 中自动化训练、添加单元测试、Docker 化），告诉我具体需求我来完成。
-
----
-
-如果你希望我把 README 调整成英文版、添加更详细的 API 文档（含请求/响应示例）、或直接在仓库生成 Release 包（zip），告诉我你的偏好，我接着更新。
+> 本文由 AI源码 自动同步，完整源码与技术支持请访问官网。
